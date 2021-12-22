@@ -1,2 +1,3 @@
-const char* ssid = "wifi_ssid2";
-const char* password = "wifi_pass";
+const char* wifi_ssid = "wifi_ssid";
+const char* wifi_password = "wifi_password";
+const char* wifi_hostname = "device_one";
