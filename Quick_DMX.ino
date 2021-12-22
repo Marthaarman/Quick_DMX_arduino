@@ -1,21 +1,19 @@
-#include "wifi_settings.h"
-#include <WebSocketsClient.h>
+#include "settings.h"
 #include <ESP8266WiFi.h>
+#include <TinyXML.h>
 
-const char* quickDMX_host = "192.168.1.123";
-uint16_t quickDMX_port = 7351;
+//settings:
+String message0 = "HELLO|Live_Mobile|\r\n";
 
-const char* message0 = "HELLO|Live_Mobile_3|";
+String message1 = "BUTTON_LIST\r\n";
+String message2_1 = "BUTTON_RELEASE|";
+String message2_2 = "\r\n";
 
-WebSocketsClient webSocket;
+String message3_1 = "BUTTON_PRESS|";
+String message3_2 = "\r\n";
 
-bool clientConnected = false;
 
-bool allow_sending = false;
-bool registered = false;
-bool sent = false;
-bool accepted = false;
-String myRandWebSocket = String(rand() * 10000 + 10000);
+
 WiFiClient client;
 void setup() {
   // put your setup code here, to run once:
@@ -36,54 +34,110 @@ void setup() {
   }
   Serial.println("\nWiFi connected!");
 
-  Serial.println("connected to server");
-  // Make a HTTP request:
-  if (client.connect("192.168.1.123", 7351)) {
-    client.println("GET / HTTP/1.1");
-    client.println("Host: 192.168.1.123");
-    client.println("Upgrade: websocket");
-    client.println("Connection: Upgrade");
-    client.println("Sec-WebSocket-Key: " + String(myRandWebSocket) + String(myRandWebSocket));
-    client.println("Sec-WebSocket-Version: 13");
-    client.println();
-  }
-  webSocket.begin(quickDMX_host, quickDMX_port);
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(3000);
-  webSocket.enableHeartbeat(15000, 3000, 2);
 
 
 }
 
 void loop() {
-  if(!accepted) {
-    while (client.available()) {
-      String line = client.readStringUntil('\n');
-      if(line.substring(0,21) == "Sec-WebSocket-Accept:") {
-        accepted = true;
-      }
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect();
+    WiFi.reconnect();
+    Serial.println("Connecting...");
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
     }
+    Serial.println("\nWiFi connected!");
     return;
   }
-  Serial.println("send msg");
-  webSocket.sendTXT(message0);
-  webSocket.loop();
-}
 
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-  switch (type) {
-    case WStype_DISCONNECTED:
-      Serial.println("[WSc] Disconnected!");
-      allow_sending = false;
-      registered = false;
-      break;
-    case WStype_CONNECTED:
-      Serial.printf("[WSc] Connected to url: %s\n", payload);
-      allow_sending = true;
-      break;
-    case WStype_TEXT:
-      Serial.printf("[WSc] get text: %s\n", payload);
-      break;
+  WiFiClient client;
+  if (!client.connect(quickDMX_host, quickDMX_port)) {
+    Serial.println("connection failed");
+    return;
   }
 
+  client_send_and_receive(client, message0);
+  client_receive(client);
+
+  String button_list = client_send_and_receive(client, message1);
+  int button_ID = get_button_value(button_list, button_text, "ID");
+  if (button_ID >= 0) {
+    int pressed = get_button_value(button_list, button_text, "pressed");
+    if (pressed >= 0) {
+      delay(10);
+      if (pressed > 0) {
+        client_send_and_receive(client, message2_1 + button_ID + message2_2);
+      } else {
+        client_send_and_receive(client, message3_1 + button_ID + message3_2);
+      }
+    }else {
+      Serial.println("Status not found");
+    }
+  } else {
+    Serial.println("Button not found");
+  }
+  delay(4000);
+  client.stop();
+}
+
+String client_receive(WiFiClient client) {
+  String response_text = "";
+  if (client.connected()) {
+    Serial.print("Waiting for response");
+    bool response = false;
+    while (!response) {
+      Serial.print(".");
+      while (client.available()) {
+        Serial.println("");
+        Serial.println("Response:");
+        response = true;
+        String line = client.readStringUntil('\n');
+        response_text += line;
+        Serial.println(line);
+      }
+      delay(1);
+    }
+  }
+  return response_text;
+}
+
+String client_send_and_receive(WiFiClient client, String message) {
+  String response_text = "";
+  if (client.connected()) {
+    Serial.print("Sending message: ");
+    client.println(message);
+    Serial.print("Waiting for response");
+    bool response = false;
+
+    while (!response) {
+      Serial.print(".");
+      while (client.available()) {
+        Serial.println("");
+        Serial.println("Response:");
+        response = true;
+        String line = client.readStringUntil('\n');
+        response_text += line;
+        Serial.println(line);
+      }
+    }
+  }
+  return response_text;
+}
+
+int get_button_value(String button_list, String button_name, String parameter) {
+  int needle_location = button_list.indexOf(">"+button_name+"</button");
+  if (needle_location > 0) {
+    uint8_t button_begin = needle_location - 75;
+    uint8_t button_end = needle_location;
+    String button_substring = button_list.substring(button_begin, button_end);
+
+    uint8_t index_begin = button_substring.indexOf(parameter) + parameter.length() + 2;
+    String index_substring = button_substring.substring(index_begin, index_begin + 4);
+    uint8_t index_end = index_substring.indexOf('"') + index_begin;
+    String ID = button_substring.substring(index_begin, index_end);
+    return uint8_t(ID.toInt());
+  } else {
+    return -1;
+  }
 }
