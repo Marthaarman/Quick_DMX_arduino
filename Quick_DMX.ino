@@ -2,101 +2,178 @@
 #include <ESP8266WiFi.h>
 #include <TinyXML.h>
 
-//settings:
-String message0 = "HELLO|Live_Mobile|\r\n";
-
-String message1 = "BUTTON_LIST\r\n";
-String message2_1 = "BUTTON_RELEASE|";
-String message2_2 = "\r\n";
-
-String message3_1 = "BUTTON_PRESS|";
-String message3_2 = "\r\n";
 
 
+//messages:
+String msg_init = "HELLO|Live_Mobile|";
+String msg_request_buttons = "BUTTON_LIST";
+String msg_button_release = "BUTTON_RELEASE|";
+String msg_button_press = "BUTTON_PRESS|";
+
+
+bool debug = false;
+
+//  settings:
+uint16_t button_hold_time_ms = 300;
 
 WiFiClient client;
 void setup() {
-  // put your setup code here, to run once:
+  delay(1000);
   Serial.begin(9600);
-  Serial.print("WiFi: ");
-  Serial.print(wifi_ssid);
-  Serial.print(" As: ");
-  Serial.print(wifi_hostname);
-  Serial.println("");
-  Serial.println("Connecting...");
+  delay(100);
 
-  WiFi.hostname(wifi_hostname);
-  WiFi.begin(wifi_ssid, wifi_password);
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  //  initialize switch pins
+
+  for (int i = 0; i < 3; i++) {
+    pinMode(switch_pin[i], INPUT);
   }
-  Serial.println("\nWiFi connected!");
 
+  //  do not change
+  if (debug) {
+    Serial.print("WiFi: ");
+    Serial.print(wifi_ssid);
+    Serial.print(" As: ");
+    Serial.print(wifi_hostname);
+    Serial.println("");
+    Serial.println("Connecting...");
+  }
+  WiFi.hostname(wifi_hostname);
+  connect_wifi();
+}
 
+void connect_wifi() {
+  WiFi.begin(wifi_ssid, wifi_password);
+  int connect_iterations = 0;
+  bool wifi_connected = true;
+  while (WiFi.status() != WL_CONNECTED) {
+    connect_iterations++;
+    delay(500);
+    if (debug) {
+      Serial.print(".");
+    }
+    if (connect_iterations > 20) {
+      wifi_connected = false;
+      break;
+    }
+  }
 
+  if (!wifi_connected) {
+    WiFi.disconnect();
+    if (debug) {
+      Serial.println("Try again");
+    }
+    connect_wifi();
+  } else {
+    if (debug) {
+      Serial.println("Connected");
+    }
+    delay(2000);
+  }
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect();
-    WiFi.reconnect();
-    Serial.println("Connecting...");
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
+    connect_wifi();
+    return;
+  }
+
+  for (uint8_t i = 0; i < nr_switch_pins; i++) {
+    if (digitalRead(switch_pin[i]) != switch_status[i]) {
+      delay(button_hold_time_ms);
+      if (digitalRead(switch_pin[i]) != switch_status[i]) {
+        if (debug) {
+          Serial.print("pin ");
+          Serial.print(switch_pin[i]);
+          Serial.println(" triggered");
+        }
+        switch_status[i] = digitalRead(switch_pin[i]);
+        int random_number = rand() % nr_switch_buttons;
+        toggle_QuickDMX(switch_QuickDMX_button[i][0]);
+      }
     }
-    Serial.println("\nWiFi connected!");
-    return;
   }
 
+}
+
+void toggle_QuickDMX(String QuickDMX_button) {
   WiFiClient client;
-  if (!client.connect(quickDMX_host, quickDMX_port)) {
-    Serial.println("connection failed");
-    return;
+  if (debug) {
+    Serial.print("Connecting to QuickDMX host ");
+    Serial.print(quickDMX_host);
+    Serial.print(":");
+    Serial.println(quickDMX_port);
   }
 
-  client_send_and_receive(client, message0);
-  client_receive(client);
+  if (!client.connect(quickDMX_host, quickDMX_port)) {
+    if (debug) {
+      Serial.println("connection failed");
+    }
+    return;
+  }
+  if (quickDMX_pass == "") {
+    client_send_and_receive(client, msg_init);
+  } else {
+    client_send_and_receive(client, msg_init + quickDMX_pass);
+  }
 
-  String button_list = client_send_and_receive(client, message1);
-  int button_ID = get_button_value(button_list, button_text, "ID");
+  client_receive(client);
+  String button_list = client_send_and_receive(client, msg_request_buttons);
+  int button_ID = get_button_value(button_list, QuickDMX_button, "index");
   if (button_ID >= 0) {
-    int pressed = get_button_value(button_list, button_text, "pressed");
+    int pressed = get_button_value(button_list, QuickDMX_button, "pressed");
     if (pressed >= 0) {
       delay(10);
       if (pressed > 0) {
-        client_send_and_receive(client, message2_1 + button_ID + message2_2);
+        client_send_and_receive(client, msg_button_release + button_ID);
       } else {
-        client_send_and_receive(client, message3_1 + button_ID + message3_2);
+        client_send_and_receive(client, msg_button_press + button_ID);
       }
-    }else {
-      Serial.println("Status not found");
+    } else {
+      if (debug) {
+        Serial.println("Status not found");
+      }
     }
   } else {
-    Serial.println("Button not found");
+    if (debug) {
+      Serial.println("Button not found");
+    }
   }
-  delay(4000);
+
   client.stop();
 }
 
 String client_receive(WiFiClient client) {
   String response_text = "";
   if (client.connected()) {
-    Serial.print("Waiting for response");
+    if (debug) {
+      Serial.print("Waiting for response");
+    }
+    uint8_t iteration = 0;
     bool response = false;
     while (!response) {
-      Serial.print(".");
+      iteration++;
+      if (debug) {
+        Serial.print(".");
+      }
       while (client.available()) {
-        Serial.println("");
-        Serial.println("Response:");
         response = true;
+        if (debug) {
+          Serial.println("Received a response");
+        }
+        yield();
         String line = client.readStringUntil('\n');
         response_text += line;
-        Serial.println(line);
+        if (debug) {
+          //Serial.println("");
+          //Serial.println("Response:");
+          //Serial.println(line);
+        }
       }
       delay(1);
+      if (iteration > 50) {
+        break;
+      }
     }
   }
   return response_text;
@@ -105,38 +182,33 @@ String client_receive(WiFiClient client) {
 String client_send_and_receive(WiFiClient client, String message) {
   String response_text = "";
   if (client.connected()) {
-    Serial.print("Sending message: ");
-    client.println(message);
-    Serial.print("Waiting for response");
-    bool response = false;
-
-    while (!response) {
-      Serial.print(".");
-      while (client.available()) {
-        Serial.println("");
-        Serial.println("Response:");
-        response = true;
-        String line = client.readStringUntil('\n');
-        response_text += line;
-        Serial.println(line);
-      }
+    if (debug) {
+      Serial.print("Sending message: ");
+      Serial.println(message);
     }
+    client.println(message + "\r\n");
+    return client_receive(client);
+
   }
   return response_text;
 }
 
 int get_button_value(String button_list, String button_name, String parameter) {
-  int needle_location = button_list.indexOf(">"+button_name+"</button");
+  int needle_location = button_list.indexOf(">" + button_name + "</button");
   if (needle_location > 0) {
-    uint8_t button_begin = needle_location - 75;
-    uint8_t button_end = needle_location;
+    uint16_t button_begin = needle_location - 75;
+    uint16_t button_end = needle_location;
     String button_substring = button_list.substring(button_begin, button_end);
-
-    uint8_t index_begin = button_substring.indexOf(parameter) + parameter.length() + 2;
-    String index_substring = button_substring.substring(index_begin, index_begin + 4);
-    uint8_t index_end = index_substring.indexOf('"') + index_begin;
-    String ID = button_substring.substring(index_begin, index_end);
-    return uint8_t(ID.toInt());
+    uint16_t index_begin = button_substring.indexOf(parameter);
+    if (index_begin > 0) {
+      index_begin += parameter.length() + 2;
+      String index_substring = button_substring.substring(index_begin, index_begin + 4);
+      uint16_t index_end = index_substring.indexOf('"') + index_begin;
+      String ID = button_substring.substring(index_begin, index_end);
+      return uint8_t(ID.toInt());
+    } else {
+      return -1;
+    }
   } else {
     return -1;
   }
